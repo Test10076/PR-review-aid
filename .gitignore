@@ -1,4 +1,10 @@
+# Python / MkDocs
+site/
+venv/
+__pycache__/
+
+# OS
 .DS_Store
-scripts/__pycache__/*
-tanssi-docs*
-venv
+
+# Archives
+*.zip

@@ -1,1 +1,2 @@
--r https://raw.githubusercontent.com/papermoonio/workflows/refs/heads/main/requirements.txt
+mkdocs==1.6.0
+mkdocs-material==9.5.30

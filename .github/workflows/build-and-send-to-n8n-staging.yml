@@ -1,0 +1,138 @@
+name: Build MkDocs → Send to n8n (STAGING)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "ci/staging" ]
+    paths:
+      - "mkdocs.yml"
+      - "requirements.txt"
+      - "docs/**"
+      - ".github/workflows/build-and-send-to-n8n-staging.yml"
+
+permissions:
+  contents: read
+
+env:
+  CHUNK_SIZE_MB: "20"   # small for initial testing; bump later as needed
+
+jobs:
+  build-and-send:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Mask staging webhook
+        run: echo "::add-mask::${{ secrets.N8N_WEBHOOK_URL_STAGING }}"
+
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          ref: ci/staging
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: ${{ runner.os }}-pip-
+
+      - name: Install MkDocs & theme (quiet)
+        run: |
+          set -euo pipefail
+          set +x
+          pip install --quiet --no-input -r requirements.txt
+
+      - name: Build site (STRICT + quiet + clean)
+        run: |
+          set -euo pipefail
+          mkdocs --version
+          mkdocs build --strict -q --clean --site-dir ./site
+
+      - name: Add build manifest (metadata + checksum)
+        run: |
+          set -euo pipefail
+          SITE_SHA256=$( (cd site && find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}') )
+          cat > site/build_manifest.json <<JSON
+          {
+            "source_repo": "${{ github.repository }}",
+            "branch": "${{ github.ref_name }}",
+            "commit": "${{ github.sha }}",
+            "mkdocs_version": "$(mkdocs --version | sed 's/^mkdocs, //')",
+            "built_at_utc": "$(date -u +'%Y-%m-%dT%H:%M:%SZ')",
+            "site_tree_hash_sha256": "${SITE_SHA256}"
+          }
+          JSON
+
+      - name: Zip site (quiet)
+        run: |
+          set -euo pipefail
+          (cd site && zip -qr ../site.zip .)
+          sha256sum site.zip > site.zip.sha256
+          ls -lh site.zip
+
+      - name: Split zip into chunks
+        id: split
+        run: |
+          set -euo pipefail
+          BYTES="$(( ${CHUNK_SIZE_MB} * 1024 * 1024 ))"
+          split -b "${BYTES}" -d -a 4 site.zip site.zip.part-
+          PARTS=( $(ls site.zip.part-* 2>/dev/null || true) )
+          if [ ${#PARTS[@]} -eq 0 ]; then
+            cp site.zip site.zip.part-0000
+            PARTS=(site.zip.part-0000)
+          fi
+          echo "total_parts=${#PARTS[@]}" >> "$GITHUB_OUTPUT"
+          echo "upload_id=$(uuidgen || cat /proc/sys/kernel/random/uuid)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload chunks to n8n (staging)
+        env:
+          N8N_WEBHOOK_URL: ${{ secrets.N8N_WEBHOOK_URL_STAGING }}
+        run: |
+          set -euo pipefail
+          [ -n "${N8N_WEBHOOK_URL:-}" ] || { echo "Missing N8N_WEBHOOK_URL_STAGING"; exit 1; }
+          TOTAL="${{ steps.split.outputs.total_parts }}"
+          UPLOAD_ID="${{ steps.split.outputs.upload_id }}"
+          FILENAME="site.zip"
+          ZIP_SHA256="$(cut -d' ' -f1 site.zip.sha256)"
+
+          i=0
+          for P in $(ls site.zip.part-* | sort); do
+            echo "Uploading part $((i+1))/$TOTAL"
+            curl -sS --fail --retry 3 --max-time 180 \
+              -H "X-Upload-Id: ${UPLOAD_ID}" \
+              -H "X-Total-Parts: ${TOTAL}" \
+              -H "X-Part-Index: ${i}" \
+              -H "X-Filename: ${FILENAME}" \
+              -H "X-Zip-Sha256: ${ZIP_SHA256}" \
+              -H "X-Env: sandbox" \
+              -F "upload_id=${UPLOAD_ID}" \
+              -F "total_parts=${TOTAL}" \
+              -F "part_index=${i}" \
+              -F "filename=${FILENAME}" \
+              -F "zip_sha256=${ZIP_SHA256}" \
+              -F "file=@${P};type=application/octet-stream" \
+              "${N8N_WEBHOOK_URL}" >/dev/null
+            i=$((i+1))
+          done
+
+      - name: Finalize (staging)
+        if: always()
+        env:
+          N8N_WEBHOOK_URL: ${{ secrets.N8N_WEBHOOK_URL_STAGING }}
+        run: |
+          set -euo pipefail
+          curl -sS --fail -H "Content-Type: application/json" \
+            -d @- "${N8N_WEBHOOK_URL}" <<'JSON'
+          {
+            "status": "completed",
+            "action": "build_artifact_uploaded",
+            "environment": "sandbox",
+            "upload_id": "${{ steps.split.outputs.upload_id }}",
+            "filename": "site.zip"
+          }
+          JSON
