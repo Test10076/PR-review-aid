@@ -1,2 +1,4 @@
 .DS_Store
 scripts/__pycache__/*
+tanssi-docs*
+venv
