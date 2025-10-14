@@ -19,7 +19,7 @@ Welcome! This site exists to test a GitHub Actions workflow that:
 
 ---
 
-## What n8n receives
+## What n8n receives 
 
 - **Files:** The complete `site/` directory as `site.zip`
 - **Headers/fields:** `upload_id`, `total_parts`, `part_index`, `filename`, `zip_sha256`
@@ -60,6 +60,13 @@ A: Yes—open `build_manifest.json` in the extracted site folder on the n8n side
 A: Add a broken link (e.g., `[Missing](/nope/)`) and confirm your QA flow flags it.
 
 ---
+
+## Next steps
+
+- Replace this page with your actual project docs.
+- Point the workflow to your production n8n webhook.
+- Optional: attach a QA report to the zip (e.g., `qa_report.json`) so n8n can display results.
+
 
 ## Next steps
 
