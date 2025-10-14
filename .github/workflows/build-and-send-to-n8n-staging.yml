@@ -22,7 +22,7 @@ jobs:
 
     steps:
       - name: Mask staging webhook
-        run: echo "::add-mask::${{ secrets.N8N_WEBHOOK_URL_STAGING }}"
+        run: echo "::add-mask::${{ secrets.N8N_WEBHOOK_URL_QA }}"
 
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -91,10 +91,10 @@ jobs:
 
       - name: Upload chunks to n8n (staging)
         env:
-          N8N_WEBHOOK_URL: ${{ secrets.N8N_WEBHOOK_URL_STAGING }}
+          N8N_WEBHOOK_URL: ${{ secrets.N8N_WEBHOOK_URL_QA }}
         run: |
           set -euo pipefail
-          [ -n "${N8N_WEBHOOK_URL:-}" ] || { echo "Missing N8N_WEBHOOK_URL_STAGING"; exit 1; }
+          [ -n "${N8N_WEBHOOK_URL_QA:-}" ] || { echo "Missing N8N_WEBHOOK_URL_QA"; exit 1; }
           TOTAL="${{ steps.split.outputs.total_parts }}"
           UPLOAD_ID="${{ steps.split.outputs.upload_id }}"
           FILENAME="site.zip"
@@ -123,11 +123,11 @@ jobs:
       - name: Finalize (staging)
         if: always()
         env:
-          N8N_WEBHOOK_URL: ${{ secrets.N8N_WEBHOOK_URL_STAGING }}
+          N8N_WEBHOOK_URL: ${{ secrets.N8N_WEBHOOK_URL_QA}}
         run: |
           set -euo pipefail
           curl -sS --fail -H "Content-Type: application/json" \
-            -d @- "${N8N_WEBHOOK_URL}" <<'JSON'
+            -d @- "${N8N_WEBHOOK_URL_QA}" <<'JSON'
           {
             "status": "completed",
             "action": "build_artifact_uploaded",
