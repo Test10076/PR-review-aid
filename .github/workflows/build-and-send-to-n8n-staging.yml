@@ -1,4 +1,4 @@
-name: Build MkDocs → Send to n8n (STAGING)
+name: Build MkDocs → Send to n8n (STAGING, single .tar.gz)
 
 on:
   workflow_dispatch:
@@ -13,13 +13,10 @@ on:
 permissions:
   contents: read
 
-env:
-  CHUNK_SIZE_MB: "20"   # small for initial testing; bump later as needed
-
 jobs:
   build-and-send:
     runs-on: ubuntu-latest
-    environment: n8n-QA   # <-- GitHub Environment name
+    environment: n8n-QA
 
     steps:
       - name: Mask QA webhook
@@ -54,7 +51,7 @@ jobs:
           mkdocs --version
           mkdocs build --strict -q --clean --site-dir ./site
 
-      - name: Add build manifest (metadata + checksum)
+      - name: Add build manifest (metadata + tree checksum)
         run: |
           set -euo pipefail
           SITE_SHA256=$( (cd site && find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}') )
@@ -69,72 +66,29 @@ jobs:
           }
           JSON
 
-      - name: Zip site (quiet)
+      - name: Create single archive (.tar.gz)
         run: |
           set -euo pipefail
-          (cd site && zip -qr ../site.zip .)
-          sha256sum site.zip > site.zip.sha256
-          ls -lh site.zip
+          tar -C site -czf site.tar.gz .
+          sha256sum site.tar.gz > site.tar.gz.sha256
+          ls -lh site.tar.gz
 
-      - name: Split zip into chunks
-        id: split
-        run: |
-          set -euo pipefail
-          BYTES="$(( ${CHUNK_SIZE_MB} * 1024 * 1024 ))"
-          split -b "${BYTES}" -d -a 4 site.zip site.zip.part-
-          PARTS=( $(ls site.zip.part-* 2>/dev/null || true) )
-          if [ ${#PARTS[@]} -eq 0 ]; then
-            cp site.zip site.zip.part-0000
-            PARTS=(site.zip.part-0000)
-          fi
-          echo "total_parts=${#PARTS[@]}" >> "$GITHUB_OUTPUT"
-          echo "upload_id=$(uuidgen || cat /proc/sys/kernel/random/uuid)" >> "$GITHUB_OUTPUT"
-
-      - name: Upload chunks to n8n (QA)
-        env:
-          N8N_WEBHOOK_URL_QA: ${{ secrets.N8N_WEBHOOK_URL_QA }}
-        run: |
-          set -euo pipefail
-          : "${N8N_WEBHOOK_URL_QA:?Missing N8N_WEBHOOK_URL_QA}"   # hard fail if missing
-          TOTAL="${{ steps.split.outputs.total_parts }}"
-          UPLOAD_ID="${{ steps.split.outputs.upload_id }}"
-          FILENAME="site.zip"
-          ZIP_SHA256="$(cut -d' ' -f1 site.zip.sha256)"
-
-          i=0
-          for P in $(ls site.zip.part-* | sort); do
-            echo "Uploading part $((i+1))/$TOTAL"
-            curl -sS --fail --retry 3 --max-time 180 \
-              -H "X-Upload-Id: ${UPLOAD_ID}" \
-              -H "X-Total-Parts: ${TOTAL}" \
-              -H "X-Part-Index: ${i}" \
-              -H "X-Filename: ${FILENAME}" \
-              -H "X-Zip-Sha256: ${ZIP_SHA256}" \
-              -H "X-Env: sandbox" \
-              -F "upload_id=${UPLOAD_ID}" \
-              -F "total_parts=${TOTAL}" \
-              -F "part_index=${i}" \
-              -F "filename=${FILENAME}" \
-              -F "zip_sha256=${ZIP_SHA256}" \
-              -F "file=@${P};type=application/octet-stream" \
-              "${N8N_WEBHOOK_URL_QA}" >/dev/null
-            i=$((i+1))
-          done
-
-      - name: Finalize (QA)
-        if: always()
+      - name: Send to n8n (single POST, no chunking)
         env:
           N8N_WEBHOOK_URL_QA: ${{ secrets.N8N_WEBHOOK_URL_QA }}
         run: |
           set -euo pipefail
           : "${N8N_WEBHOOK_URL_QA:?Missing N8N_WEBHOOK_URL_QA}"
-          curl -sS --fail -H "Content-Type: application/json" \
-            -d @- "${N8N_WEBHOOK_URL_QA}" <<'JSON'
-          {
-            "status": "completed",
-            "action": "build_artifact_uploaded",
-            "environment": "sandbox",
-            "upload_id": "${{ steps.split.outputs.upload_id }}",
-            "filename": "site.zip"
-          }
-          JSON
+          ARCHIVE_SHA256="$(cut -d' ' -f1 site.tar.gz.sha256)"
+          UPLOAD_ID="$(uuidgen || cat /proc/sys/kernel/random/uuid)"
+          FILENAME="site.tar.gz"
+
+          curl -sS --fail --retry 3 --max-time 300 \
+            -H "X-Upload-Id: ${UPLOAD_ID}" \
+            -H "X-Archive-Sha256: ${ARCHIVE_SHA256}" \
+            -H "X-Env: sandbox" \
+            -F "upload_id=${UPLOAD_ID}" \
+            -F "filename=${FILENAME}" \
+            -F "archive_sha256=${ARCHIVE_SHA256}" \
+            -F "file=@site.tar.gz;type=application/gzip" \
+            "${N8N_WEBHOOK_URL_QA}" >/dev/null
