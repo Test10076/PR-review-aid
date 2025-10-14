@@ -19,9 +19,10 @@ env:
 jobs:
   build-and-send:
     runs-on: ubuntu-latest
+    environment: n8n-QA   # <-- GitHub Environment name
 
     steps:
-      - name: Mask staging webhook
+      - name: Mask QA webhook
         run: echo "::add-mask::${{ secrets.N8N_WEBHOOK_URL_QA }}"
 
       - name: Checkout repo
@@ -89,12 +90,12 @@ jobs:
           echo "total_parts=${#PARTS[@]}" >> "$GITHUB_OUTPUT"
           echo "upload_id=$(uuidgen || cat /proc/sys/kernel/random/uuid)" >> "$GITHUB_OUTPUT"
 
-      - name: Upload chunks to n8n (staging)
+      - name: Upload chunks to n8n (QA)
         env:
-          N8N_WEBHOOK_URL: ${{ secrets.N8N_WEBHOOK_URL_QA }}
+          N8N_WEBHOOK_URL_QA: ${{ secrets.N8N_WEBHOOK_URL_QA }}
         run: |
           set -euo pipefail
-          [ -n "${N8N_WEBHOOK_URL_QA:-}" ] || { echo "Missing N8N_WEBHOOK_URL_QA"; exit 1; }
+          : "${N8N_WEBHOOK_URL_QA:?Missing N8N_WEBHOOK_URL_QA}"   # hard fail if missing
           TOTAL="${{ steps.split.outputs.total_parts }}"
           UPLOAD_ID="${{ steps.split.outputs.upload_id }}"
           FILENAME="site.zip"
@@ -116,16 +117,17 @@ jobs:
               -F "filename=${FILENAME}" \
               -F "zip_sha256=${ZIP_SHA256}" \
               -F "file=@${P};type=application/octet-stream" \
-              "${N8N_WEBHOOK_URL}" >/dev/null
+              "${N8N_WEBHOOK_URL_QA}" >/dev/null
             i=$((i+1))
           done
 
-      - name: Finalize (staging)
+      - name: Finalize (QA)
         if: always()
         env:
-          N8N_WEBHOOK_URL: ${{ secrets.N8N_WEBHOOK_URL_QA}}
+          N8N_WEBHOOK_URL_QA: ${{ secrets.N8N_WEBHOOK_URL_QA }}
         run: |
           set -euo pipefail
+          : "${N8N_WEBHOOK_URL_QA:?Missing N8N_WEBHOOK_URL_QA}"
           curl -sS --fail -H "Content-Type: application/json" \
             -d @- "${N8N_WEBHOOK_URL_QA}" <<'JSON'
           {
